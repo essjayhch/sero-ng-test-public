@@ -19,16 +19,18 @@ functions.http("ingestConsumptionData", async (_req, res) => {
     "https://api.carbonintensity.org.uk/intensity/2023-01-01T10:00/2023-01-01T11:00"
   );
 
-  const response = (await r.json()) as { data: ConsumptionData };
+  console.log (" Raw Data " + JSON.stringify(r))
+  const response = (await r.json()) as { data: ConsumptionData[] };
+  console.log(" Retrieved API call with the following: " + JSON.stringify(response) )
 
   const prisma = new PrismaClient();
-
+  console.log("from: "+response.data[0].from)
   await prisma.data.create({
     data: {
-      from: response.data.from,
-      to: response.data.to,
-      forecast: response.data.intensity.forecast,
-      actual: response.data.intensity.actual,
+      from: response.data[0].from,
+      to: response.data[0].to,
+      forecast: response.data[0].intensity.forecast,
+      actual: response.data[0].intensity.actual,
     },
   });
 

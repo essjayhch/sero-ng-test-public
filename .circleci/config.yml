@@ -1,0 +1,124 @@
+version: 2.1
+
+executors:
+  node:
+    docker:
+      - image: node:16
+  terragrunt:
+    docker:
+      - image: livelink/terragrunt:1.1.6
+        auth:
+          username: $DOCKER_USER
+          password: $DOCKER_PASS
+jobs:
+  build:
+    executor: node
+    description: build the application
+    steps:
+      - checkout
+      - run:
+          name: build artefact
+          command: |
+            cd build
+            ./build.sh
+      - run:
+          name: push artefact
+          command: cd build && ./push.sh $CIRCLE_SHA1
+  deploy:
+    executor: terragrunt
+    description: deploy the application
+    steps:
+      - checkout
+      - run:
+          name: deploy fetcher to test
+          command: |
+            cd workspaces/test/cloud_functions/fetch
+            TF_VAR_archive=fetch-${CIRCLE_SHA1}.zip terragrunt apply --auto-approve
+      - run:
+          name: deploy ingester to test
+          command: |
+            cd workspaces/test/cloud_functions/ingest
+            TF_VAR_archive=ingest-${CIRCLE_SHA1}.zip terragrunt apply --auto-approve
+
+  checkout:
+    docker:
+      - image: cimg/base:2021.04
+    steps:
+      - checkout
+      - run:
+          name: Git diff with Terraform files
+          command: |
+            git diff --name-only --diff-filter=d master | grep .tf$ > git_diff_tf || true
+            cat git_diff_tf
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  terraform_format:
+    executor: terragrunt
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Terraform Format
+          command: cat git_diff_tf | xargs -L 1 terraform fmt -diff -check
+  terraform_lint:
+    docker:
+      - image: ghcr.io/terraform-linters/tflint-bundle:v0.41.0.1
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Terraform Lint Plugins Init
+          command: tflint --init
+      - run:
+          name: Terraform Lint
+          command: cat git_diff_tf | xargs -n 1 tflint
+  terragrunt_format:
+    executor: terragrunt
+    steps:
+      - checkout
+      - run: terragrunt hclfmt --terragrunt-check
+  security_analysis:
+    docker:
+    - image: aquasec/tfsec-alpine:latest
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Terraform security analysis
+          command: tfsec
+workflows:
+  version: 2
+  develop:
+    jobs:
+      - checkout
+      - terragrunt_format:
+          context:
+            - docker
+      - terraform_format:
+          context:
+            - docker
+          requires:
+            - checkout
+      - terraform_lint:
+          requires:
+            - checkout
+          context:
+            - docker
+      - security_analysis:
+          requires:
+            - checkout
+          context:
+            - docker
+  build_and_deploy:
+    jobs:
+      - build
+      - approve_deploy:
+          type: approval
+          requires:
+            - build
+      - deploy:
+          requires:
+            - approve_deploy
+
